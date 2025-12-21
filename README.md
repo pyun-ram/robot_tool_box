@@ -39,11 +39,11 @@
 ## 2. Observations
 
 - cam[1-4]: RGB-D camera [frequency:20Hz] [resolution:480x270]
-- [left/right]_gripper_end_effector: end-effector-pose [20Hz:syncronized to the camera]
-Tips: 这里数据采集可以用 80 Hz, 同步的时候降采样到 20 Hz。我们设定要求同步精度 < 8 ms
+- [left/right]_gripper_end_effector: end-effector-pose [20Hz:synchronized to the camera]
+- Tips: Data collection can be performed at 80 Hz, then downsampled to 20 Hz during synchronization. We require synchronization accuracy < 8 ms
 
-## 3. 场景要求
+## 3. Scene Requirements
 
-- 四个相机视野内光照均匀、没有杂物
-- 每个 episode 大概在 15 - 20s 左右
+- Uniform lighting and no clutter within the field of view of all four cameras
+- Each episode should be approximately 15-20 seconds long
 
