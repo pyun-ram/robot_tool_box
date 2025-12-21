@@ -4,7 +4,7 @@ import fire
 class Config:
     camera_names: ['cam0', 'cam1', 'cam2', 'cam3']
     camera_frequency: 20
-    camera_resolution: (480, 270)
+    camera_resolution: (640, 480)
     camera_sync_precision: 8 # ms
 
 class Runner:
