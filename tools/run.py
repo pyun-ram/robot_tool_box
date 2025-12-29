@@ -148,7 +148,7 @@ class Runner:
 
         print(f"[DONE] Successfully wrote {len(pending_moves)} frames.")
 
-    def check_calibration(self, out_root: str, episode: str, index: int) -> None:
+    def check_calibration(self, out_root: str, episode: str, index: int, save_dir: str='./') -> None:
         episode_dir = os.path.join(out_root, episode)
         calib_path = os.path.join(episode_dir, "calibrations.json")
 
@@ -247,19 +247,27 @@ class Runner:
         pcd.colors = o3d.utility.Vector3dVector(all_rgb)
 
         # --------------------------------------------------
-        # 3. 可视化辅助元素（世界坐标系）
+        # 3. 辅助函数：将 TriangleMesh 转换为点云
         # --------------------------------------------------
-        world_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+        def mesh_to_pointcloud(mesh: o3d.geometry.TriangleMesh, num_points: int = 1000) -> o3d.geometry.PointCloud:
+            """将 TriangleMesh 转换为点云（通过均匀采样表面点）"""
+            return mesh.sample_points_uniformly(number_of_points=num_points)
+
+        # --------------------------------------------------
+        # 4. 添加可视化辅助元素（世界坐标系）
+        # --------------------------------------------------
+        world_frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(
             size=0.5, origin=[0, 0, 0]
         )
+        world_frame_pcd = mesh_to_pointcloud(world_frame_mesh, num_points=500)
+        pcd = pcd + world_frame_pcd
 
-        # 3.5 读取并可视化 robot_state
+        # --------------------------------------------------
+        # 5. 读取并添加 robot_state 可视化
         # --------------------------------------------------
         robot_state_path = os.path.join(
             episode_dir, "robot_state", f"{index}.npy"
         )
-
-        robot_geoms = []
 
         if os.path.exists(robot_state_path):
             state = np.load(robot_state_path)
@@ -281,42 +289,224 @@ class Runner:
                 T[:3, 3] = [x, y, z]
 
                 # ---- 位置：红色小球
-                robot_sphere = o3d.geometry.TriangleMesh.create_sphere(
+                robot_sphere_mesh = o3d.geometry.TriangleMesh.create_sphere(
                     radius=0.04
                 )
-                robot_sphere.paint_uniform_color([1.0, 0.0, 0.0])
-                robot_sphere.transform(T)
+                robot_sphere_mesh.paint_uniform_color([1.0, 0.0, 0.0])
+                robot_sphere_mesh.transform(T)
+                robot_sphere_pcd = mesh_to_pointcloud(robot_sphere_mesh, num_points=300)
+                pcd = pcd + robot_sphere_pcd
 
                 # ---- 朝向：机器人坐标系
-                robot_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                robot_frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(
                     size=0.2, origin=[0, 0, 0]
                 )
-                robot_frame.transform(T)
-
-                robot_geoms.extend([robot_sphere, robot_frame])
+                robot_frame_mesh.transform(T)
+                robot_frame_pcd = mesh_to_pointcloud(robot_frame_mesh, num_points=500)
+                pcd = pcd + robot_frame_pcd
         else:
             print(f"[WARN] robot_state not found: {robot_state_path}")
 
         # --------------------------------------------------
-        # 4. 显示
+        # 6. 保存为 PLY 文件
         # --------------------------------------------------
-        vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name=f"Calibration Check - frame {index}")
-        vis.add_geometry(pcd)
-        vis.add_geometry(world_frame)
+        output_ply_path = os.path.join(save_dir, f"calibration_check_frame_{index}.ply")
+        os.makedirs(save_dir, exist_ok=True)
+        o3d.io.write_point_cloud(output_ply_path, pcd)
+        print(f"[SAVE] Point cloud saved to: {output_ply_path}")
 
-        for g in robot_geoms:
-            vis.add_geometry(g)
+        # --------------------------------------------------
+        # 7. 将点云投影到四个相机的图像平面并保存
+        # --------------------------------------------------
+        # 获取点云的numpy数组
+        points_base = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors)
+        
+        for cam in ["cam1", "cam2", "cam3", "cam4"]:
+            rgb_path = os.path.join(
+                episode_dir, f"{cam}_color", f"{index}.png"
+            )
+            
+            if not os.path.exists(rgb_path):
+                print(f"[SKIP] missing RGB image for {cam}, skip projection")
+                continue
+            
+            # 读取原始图像
+            img_bgr = cv2.imread(rgb_path)
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            H, W = img_rgb.shape[:2]
+            
+            # 获取相机参数
+            K = np.array(calib[cam]["intrinsics"], dtype=np.float32)
+            T_c2base = np.array(calib[cam]["extrinsics"], dtype=np.float32)
+            
+            # 计算从base到camera的变换（外参的逆矩阵）
+            T_base2c = np.linalg.inv(T_c2base)
+            
+            # 将点云从base坐标系变换到camera坐标系
+            points_hom = np.hstack([points_base, np.ones((points_base.shape[0], 1))])
+            points_cam = (T_base2c @ points_hom.T).T[:, :3]
+            
+            # 过滤掉相机后方的点（z < 0）
+            mask_valid = points_cam[:, 2] > 0.01  # 至少1cm距离
+            points_cam_valid = points_cam[mask_valid]
+            colors_valid = colors[mask_valid]
+            
+            if len(points_cam_valid) == 0:
+                print(f"[SKIP] no valid points for {cam} projection")
+                continue
+            
+            # 使用内参投影到图像平面
+            x_proj = points_cam_valid[:, 0] / points_cam_valid[:, 2] * K[0, 0] + K[0, 2]
+            y_proj = points_cam_valid[:, 1] / points_cam_valid[:, 2] * K[1, 1] + K[1, 2]
+            
+            # 过滤掉图像范围外的点
+            mask_in_image = (x_proj >= 0) & (x_proj < W) & (y_proj >= 0) & (y_proj < H)
+            x_proj = x_proj[mask_in_image].astype(int)
+            y_proj = y_proj[mask_in_image].astype(int)
+            colors_valid = colors_valid[mask_in_image]
+            
+            # 创建投影图像（复制原始图像，使用BGR格式用于绘制）
+            img_proj_bgr = img_bgr.copy()
+            
+            # 在图像上绘制投影点
+            # 将颜色从[0,1]范围转换到[0,255]，并转换为BGR格式
+            colors_rgb_uint8 = (colors_valid * 255).astype(np.uint8)
+            colors_bgr_uint8 = colors_rgb_uint8[:, [2, 1, 0]]  # RGB -> BGR
+            
+            # 绘制点（使用小圆点）
+            for i in range(len(x_proj)):
+                color_bgr = tuple(map(int, colors_bgr_uint8[i]))
+                cv2.circle(img_proj_bgr, (x_proj[i], y_proj[i]), 2, 
+                          color=color_bgr, thickness=-1)
+            
+            # 保存投影图像
+            output_proj_path = os.path.join(
+                save_dir, f"{cam}_idx{index}_projection.png"
+            )
+            cv2.imwrite(output_proj_path, img_proj_bgr)
+            print(f"[SAVE] Projection image saved to: {output_proj_path}")
 
-        opt = vis.get_render_option()
-        opt.background_color = np.array([0.1, 0.1, 0.1])
-        opt.point_size = 2.0
 
-        vis.run()
-        vis.destroy_window()
-
+    def visualize_calibration(self, save_dir: str) -> None:
+        """
+        将校准检查文件夹中的投影图像组合成2x2布局并生成GIF
+        
+        Args:
+            save_dir: 包含投影图像的目录（格式: {cam}_idx{index}_projection.png）
+        """
+        import glob
+        from PIL import Image
+        try:
+            from tqdm import tqdm
+        except ImportError:
+            # 如果tqdm不可用，使用普通的迭代器
+            tqdm = lambda x, desc=None: x
+        
+        # 找到所有投影图像文件
+        pattern = os.path.join(save_dir, "cam*_idx*_projection.png")
+        all_files = glob.glob(pattern)
+        
+        if not all_files:
+            print(f"[ERROR] No projection images found in {save_dir}")
+            return
+        
+        # 按索引分组图像
+        indices_dict = {}  # {index: {cam1: path, cam2: path, ...}}
+        
+        for filepath in all_files:
+            filename = os.path.basename(filepath)
+            # 解析文件名格式: cam1_idx0_projection.png
+            parts = filename.replace("_projection.png", "").split("_idx")
+            if len(parts) != 2:
+                continue
+            cam_name = parts[0]  # cam1, cam2, etc.
+            index = int(parts[1])
+            
+            if index not in indices_dict:
+                indices_dict[index] = {}
+            indices_dict[index][cam_name] = filepath
+        
+        # 获取所有索引并排序
+        indices = sorted(indices_dict.keys())
+        
+        if not indices:
+            print(f"[ERROR] No valid indices found")
+            return
+        
+        print(f"[INFO] Found {len(indices)} frames to visualize")
+        
+        # 为每个索引组合图像
+        frames = []
+        cam_names = ["cam1", "cam2", "cam3", "cam4"]
+        
+        for idx in tqdm(indices, desc="Combining images"):
+            cam_images = []
+            cam_paths = indices_dict[idx]
+            
+            # 加载四个相机的图像
+            for cam in cam_names:
+                if cam in cam_paths:
+                    img = Image.open(cam_paths[cam])
+                    # 转换为RGB格式（如果是RGBA或其他格式）
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    cam_images.append(img)
+                else:
+                    # 如果某个相机缺失，创建黑色占位图像
+                    if cam_images:
+                        # 使用已有图像的尺寸
+                        placeholder = Image.new('RGB', cam_images[0].size, color='black')
+                    else:
+                        placeholder = Image.new('RGB', (640, 480), color='black')
+                    cam_images.append(placeholder)
+            
+            # 确保所有图像尺寸相同（使用第一个非空图像的尺寸）
+            target_size = cam_images[0].size
+            cam_images = [img.resize(target_size) if img.size != target_size else img 
+                         for img in cam_images]
+            
+            # 组合成2x2布局: [cam1, cam2; cam3, cam4]
+            img1, img2, img3, img4 = cam_images
+            
+            # 转换为numpy数组进行拼接
+            img1_arr = np.array(img1)
+            img2_arr = np.array(img2)
+            img3_arr = np.array(img3)
+            img4_arr = np.array(img4)
+            
+            # 水平拼接：上排 [cam1, cam2]，下排 [cam3, cam4]
+            top_row = np.hstack([img1_arr, img2_arr])
+            bottom_row = np.hstack([img3_arr, img4_arr])
+            
+            # 垂直拼接
+            combined_arr = np.vstack([top_row, bottom_row])
+            
+            # 转换回PIL Image并调整尺寸到 640x480
+            combined_img = Image.fromarray(combined_arr)
+            # 使用LANCZOS重采样以获得更好的图像质量
+            combined_img = combined_img.resize((420, 360), Image.Resampling.LANCZOS)
+            frames.append(combined_img)
+        
+        # 保存为GIF
+        output_gif_path = os.path.join("calibration_visualization.gif")
+        if frames:
+            frames[0].save(
+                output_gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=200,  # 每帧200ms
+                loop=0,
+                format="GIF"
+            )
+            print(f"[SAVE] Visualization GIF saved to: {output_gif_path}")
+        else:
+            print("[ERROR] No frames to save")
 
 if __name__ == "__main__":
     runner = Runner()
     # runner.organize_data("./data_raw", "./data", "episode0")
-    runner.check_calibration("./data", "episode0", 0)
+    runner.check_calibration("./data", "episode0", 0, f"./data/check_calibration")
+    # for i in range(197):
+    #     runner.check_calibration("./data", "episode0", i, f"./data/check_calibration")
+    # runner.visualize_calibration("./data/check_calibration")
