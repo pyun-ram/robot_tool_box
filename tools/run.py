@@ -13,6 +13,7 @@ from tqdm import tqdm
 import glob
 from PIL import Image
 import imageio
+from multiprocessing import Pool
 
 class Runner:
     def __init__(self, camera_sync_precision: float = 0.03):
@@ -153,7 +154,7 @@ class Runner:
 
         print(f"[DONE] Successfully wrote {len(pending_moves)} frames.")
 
-    def check_calibration(self, out_root: str, episode: str, index: int, save_dir: str='./') -> None:
+    def check_calibration(self, out_root: str, episode: str, index: int, save_dir: str='./', save_ply: bool=False) -> None:
         episode_dir = os.path.join(out_root, episode)
         calib_path = os.path.join(episode_dir, "calibrations.json")
 
@@ -164,7 +165,7 @@ class Runner:
             calib = json.load(f)
 
         def rgbd_to_base_pcd(
-                rgb_path: str,
+                rgb_img: np.ndarray,
                 depth_path: str,
                 K: np.ndarray,
                 T_c2base: np.ndarray,
@@ -174,8 +175,7 @@ class Runner:
             # ---- copy 外参，避免原地修改 ----
             T = T_c2base.copy()
 
-            bgr = cv2.imread(rgb_path)
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            rgb = rgb_img  # rgb_img 已经是RGB格式的numpy数组
             depth16 = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
 
             if rgb.shape[:2] != depth16.shape[:2]:
@@ -207,6 +207,7 @@ class Runner:
         # --------------------------------------------------
         all_xyz_base = []
         all_rgb = []
+        cached_rgb_images = {}  # 缓存RGB图像，避免重复读取
 
         for cam in ["cam1", "cam2", "cam3", "cam4"]:
             print(f"[LOAD] {cam}")
@@ -222,11 +223,16 @@ class Runner:
                 print(f"[SKIP] missing data for {cam}")
                 continue
 
+            # 读取RGB图像并转换为RGB格式，然后缓存
+            img_bgr = cv2.imread(rgb_path)
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            cached_rgb_images[cam] = img_rgb
+
             K = np.array(calib[cam]["intrinsics"], dtype=np.float32)
             T_c2base = np.array(calib[cam]["extrinsics"], dtype=np.float32)
 
             xyz, rgb = rgbd_to_base_pcd(
-                rgb_path,
+                img_rgb,  # 传递RGB图像数组而不是路径
                 depth_path,
                 K,
                 T_c2base,
@@ -315,31 +321,30 @@ class Runner:
         # --------------------------------------------------
         # 6. 保存为 PLY 文件
         # --------------------------------------------------
-        output_ply_path = os.path.join(save_dir, f"calibration_check_frame_{index}.ply")
-        os.makedirs(save_dir, exist_ok=True)
-        o3d.io.write_point_cloud(output_ply_path, pcd)
-        print(f"[SAVE] Point cloud saved to: {output_ply_path}")
+        if save_ply:
+            output_ply_path = os.path.join(save_dir, f"calibration_check_frame_{index}.ply")
+            os.makedirs(save_dir, exist_ok=True)
+            o3d.io.write_point_cloud(output_ply_path, pcd)
+            print(f"[SAVE] Point cloud saved to: {output_ply_path}")
 
         # --------------------------------------------------
         # 7. 将点云投影到四个相机的图像平面并保存
         # --------------------------------------------------
         # 获取点云的numpy数组
-        points_base = np.asarray(pcd.points)
-        colors = np.asarray(pcd.colors)
+        points_base = np.asarray(pcd.points)[::2, :]
+        colors = np.asarray(pcd.colors)[::2, :]
         
         for cam in ["cam1", "cam2", "cam3", "cam4"]:
-            rgb_path = os.path.join(
-                episode_dir, f"{cam}_color", f"{index}.png"
-            )
-            
-            if not os.path.exists(rgb_path):
+            # 从缓存获取RGB图像
+            if cam not in cached_rgb_images:
                 print(f"[SKIP] missing RGB image for {cam}, skip projection")
                 continue
             
-            # 读取原始图像
-            img_bgr = cv2.imread(rgb_path)
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            img_rgb = cached_rgb_images[cam]
             H, W = img_rgb.shape[:2]
+            
+            # 转换为BGR格式用于后续绘制和保存
+            img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
             
             # 获取相机参数
             K = np.array(calib[cam]["intrinsics"], dtype=np.float32)
@@ -356,6 +361,7 @@ class Runner:
             mask_valid = points_cam[:, 2] > 0.01  # 至少1cm距离
             points_cam_valid = points_cam[mask_valid]
             colors_valid = colors[mask_valid]
+            depths_valid = points_cam_valid[:, 2]  # 保存深度信息（z坐标）
             
             if len(points_cam_valid) == 0:
                 print(f"[SKIP] no valid points for {cam} projection")
@@ -370,30 +376,65 @@ class Runner:
             x_proj = x_proj[mask_in_image].astype(int)
             y_proj = y_proj[mask_in_image].astype(int)
             colors_valid = colors_valid[mask_in_image]
+            depths_valid = depths_valid[mask_in_image]  # 同时过滤深度信息
             
             # 创建投影图像（复制原始图像，使用BGR格式用于绘制）
             img_proj_bgr = img_bgr.copy()
             
-            # 在图像上绘制投影点
+            # 创建深度缓冲区（z-buffer），初始化为很大的值
+            depth_buffer = np.full((H, W), np.inf, dtype=np.float32)
+            
             # 将颜色从[0,1]范围转换到[0,255]，并转换为BGR格式
             colors_rgb_uint8 = (colors_valid * 255).astype(np.uint8)
-            colors_bgr_uint8 = colors_rgb_uint8[:, [2, 1, 0]]  # RGB -> BGR
+            colors_bgr_uint8 = colors_rgb_uint8[:, [2, 1, 0]].astype(np.uint8)  # RGB -> BGR
             
-            # 绘制点（使用小圆点）
-            for i in range(len(x_proj)):
-                color_bgr = tuple(map(int, colors_bgr_uint8[i]))
-                cv2.circle(img_proj_bgr, (x_proj[i], y_proj[i]), 2, 
-                          color=color_bgr, thickness=-1)
+            # 根据深度绘制点：使用for循环，对于每个点，只在更近时才覆盖颜色
+            radius = 2
+            # 创建圆形模板的偏移坐标（相对于中心点的偏移）
+            y_offsets, x_offsets = np.ogrid[-radius:radius+1, -radius:radius+1]
+            circle_mask = (x_offsets**2 + y_offsets**2) <= radius**2
+            y_circle, x_circle = np.where(circle_mask)
+            y_circle = y_circle - radius  # 转换为相对于中心的偏移
+            x_circle = x_circle - radius
+            
+            num_points = len(x_proj)
+            for i in range(num_points):
+                x_center, y_center = x_proj[i], y_proj[i]
+                depth = depths_valid[i]
+                color = colors_bgr_uint8[i]
+                
+                # 计算当前点圆形区域内所有像素的坐标
+                x_pixels = x_center + x_circle
+                y_pixels = y_center + y_circle
+                
+                # 过滤掉超出图像边界的像素
+                valid_mask = (x_pixels >= 0) & (x_pixels < W) & (y_pixels >= 0) & (y_pixels < H)
+                x_pixels_valid = x_pixels[valid_mask]
+                y_pixels_valid = y_pixels[valid_mask]
+                
+                if len(x_pixels_valid) == 0:
+                    continue
+                
+                # 批量检查深度：只有当当前点更近时才更新
+                # 使用向量化操作比较深度
+                closer_mask = depth < depth_buffer[y_pixels_valid, x_pixels_valid]
+                if np.any(closer_mask):
+                    # 只更新更近的像素
+                    y_closer = y_pixels_valid[closer_mask]
+                    x_closer = x_pixels_valid[closer_mask]
+                    depth_buffer[y_closer, x_closer] = depth
+                    img_proj_bgr[y_closer, x_closer] = color
             
             # 保存投影图像
             output_proj_path = os.path.join(
                 save_dir, f"{cam}_idx{index}_projection.png"
             )
+            Path(output_proj_path).parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(output_proj_path, img_proj_bgr)
             print(f"[SAVE] Projection image saved to: {output_proj_path}")
 
 
-    def visualize_calibration(self, save_dir: str) -> None:
+    def visualize_calibration(self, save_dir: str, output_gif_path) -> None:
         """
         将校准检查文件夹中的投影图像组合成2x2布局并生成GIF
         
@@ -485,8 +526,6 @@ class Runner:
             combined_img = combined_img.resize((420, 360), Image.Resampling.LANCZOS)
             frames.append(combined_img)
         
-        # 保存为GIF
-        output_gif_path = os.path.join("calibration_visualization.gif")
         if frames:
             frames[0].save(
                 output_gif_path,
@@ -604,10 +643,66 @@ class Runner:
         else:
             raise ValueError("No frames to visualize")
 
+def _check_calibration_wrapper(args):
+    """包装函数，用于多进程调用 check_calibration"""
+    out_root, episode, index, save_dir = args
+    runner = Runner()
+    runner.check_calibration(out_root, episode, index, save_dir)
+    return index
+
 if __name__ == "__main__":
     runner = Runner()
     # runner.organize_data("./data_raw", "./data", "episode0")
-    runner.check_calibration("./data", "episode0", 0, f"./data/check_calibration")
-    # for i in range(197):
-    #     runner.check_calibration("./data", "episode0", i, f"./data/check_calibration")
-    # runner.visualize_calibration("./data/check_calibration")
+    # runner.check_calibration("./data", "episode0", 0, f"./data/check_calibration")
+    
+    # 处理所有episodes
+    out_root = "./data/20260102_s1_data/task1/"
+    out_root_path = Path(out_root)
+    
+    # 找到所有episode目录并按数字排序
+    def episode_sort_key(x):
+        episode_num_str = x.name.replace("episode", "")
+        try:
+            return int(episode_num_str)
+        except ValueError:
+            return 999999
+    
+    episode_dirs = sorted(out_root_path.glob("episode*"), key=episode_sort_key)
+    
+    print(f"找到 {len(episode_dirs)} 个episodes")
+    
+    for episode_dir in episode_dirs:
+        episode = episode_dir.name
+        print(f"\n处理 {episode}...")
+        
+        save_dir = f"./data/20260102_s1_data/check_calibration/task1/{episode}"
+        
+        # 检查episode目录是否存在必要的文件
+        cam1_color_dir = episode_dir / "cam1_color"
+        if not cam1_color_dir.exists():
+            print(f"[SKIP] {episode}: cam1_color目录不存在")
+            continue
+            
+        num_frames = len(list(cam1_color_dir.glob("*.png")))
+        if num_frames == 0:
+            print(f"[SKIP] {episode}: 没有找到图像文件")
+            continue
+            
+        print(f"  {episode}: 找到 {num_frames} 帧")
+        indices = sorted(list(range(num_frames)))[::5]
+        args_list = [(out_root, episode, i, save_dir) for i in indices]
+        
+        # 使用多进程执行
+        with Pool(processes=4) as pool:
+            pool.map(_check_calibration_wrapper, args_list)
+        
+        # 生成GIF可视化
+        gif_output_dir = Path(save_dir).parent / "gif"
+        gif_output_dir.mkdir(parents=True, exist_ok=True)
+        runner.visualize_calibration(
+            save_dir,
+            str(gif_output_dir / f"{episode}.gif"))
+        
+        print(f"  {episode}: 完成")
+    
+    print(f"\n所有episodes处理完成！")
