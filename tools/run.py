@@ -18,20 +18,21 @@ import pickle
 import fire
 # 3d diffuser actor package
 from utils import common_utils
+from utils.common_utils import LowDimObsDemo, LowDimObservation
 from datasets_module.dataset_engine import image_to_float_array_inplace
-class LowDimObsDemo:
-    def __init__(self):
-        self._observations = []
-        self._expert_trajectories = []
+# class LowDimObsDemo:
+#     def __init__(self):
+#         self._observations = []
+#         self._expert_trajectories = []
 
-    def __getitem__(self, i):
-        return self._observations[i]
+#     def __getitem__(self, i):
+#         return self._observations[i]
     
-    def __len__(self):
-        return len(self._observations)
+#     def __len__(self):
+#         return len(self._observations)
 
-    def restore_state(self):
-        return
+#     def restore_state(self):
+#         return
 
 def convert_physical_robot_camera_to_rlbench_format(intrinsics_B, extrinsics_B):
     """
@@ -69,12 +70,12 @@ def convert_physical_robot_openness_to_rlbench_format(openness):
     else:
         return 0.0
 
-class LowDimObservation:
-    def __init__(self, gripper_pose, gripper_open, joint_positions, misc):
-        self.gripper_pose = gripper_pose
-        self.gripper_open = gripper_open
-        self.joint_positions = joint_positions
-        self.misc = misc
+# class LowDimObservation:
+#     def __init__(self, gripper_pose, gripper_open, joint_positions, misc):
+#         self.gripper_pose = gripper_pose
+#         self.gripper_open = gripper_open
+#         self.joint_positions = joint_positions
+#         self.misc = misc
 
 
 class Runner:
@@ -220,7 +221,7 @@ class Runner:
         '''
         python tools/run.py convert_data_to_standard_format \
             --episode_dir data/20260102_s1_data/task1/episode0 \
-            --save_dir data/20260102_s1_data_converted/task1/episode0
+            --save_dir /usr/app/Code/3d_diffuser_actor/data/rmt/20260102_s1_data_converted/train/task1/all_variations/episodes/episode0
         '''
 
         def _copy_data(src_path, dst_path):
@@ -281,10 +282,10 @@ class Runner:
             
             # nerf 8 rgb, nerf 8 depth
             src_path = os.path.join(episode_dir, "cam2_color", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/images/{frame_index}", f"8.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/images", f"8.png")
             _copy_data(src_path, dst_path)
             src_path = os.path.join(episode_dir, "cam2_depth", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/depths/{frame_index}", f"8.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/depths", f"8.png")
             depth_m = _read_depth_image_real_sense(src_path)
             depth_m = np.clip(depth_m, near, far)
             depth_uint8 = common_utils.encode_depth_from_float_to_uint8(
@@ -298,10 +299,10 @@ class Runner:
             
             # nerf 16 rgb, nerf 16 depth
             src_path = os.path.join(episode_dir, "cam3_color", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/images/{frame_index}", f"16.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/images", f"16.png")
             _copy_data(src_path, dst_path)
             src_path = os.path.join(episode_dir, "cam3_depth", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/depths/{frame_index}", f"16.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/depths", f"16.png")
             depth_m = _read_depth_image_real_sense(src_path)
             depth_m = np.clip(depth_m, near, far)
             depth_uint8 = common_utils.encode_depth_from_float_to_uint8(
@@ -315,10 +316,10 @@ class Runner:
             
             # nerf 36 rgb, nerf 36 depth
             src_path = os.path.join(episode_dir, "cam4_color", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/images/{frame_index}", f"36.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/images", f"36.png")
             _copy_data(src_path, dst_path)
             src_path = os.path.join(episode_dir, "cam4_depth", f"{frame_index}.png")
-            dst_path = os.path.join(save_dir, f"nerf_data/depths/{frame_index}", f"36.png")
+            dst_path = os.path.join(save_dir, f"nerf_data/{frame_index}/depths", f"36.png")
             depth_m = _read_depth_image_real_sense(src_path)
             depth_m = np.clip(depth_m, near, far)
             depth_uint8 = common_utils.encode_depth_from_float_to_uint8(
@@ -377,19 +378,23 @@ class Runner:
                 future_gripper_open = convert_physical_robot_openness_to_rlbench_format(float(future_gripper_state[7]))
                 trajectory = np.concatenate([future_gripper_pose, [future_gripper_open]]).reshape(1, 8).astype(np.float32)
             else:
-                # 如果没有未来第10帧，使用当前帧的值
-                trajectory = np.concatenate([gripper_pose, [gripper_open]]).reshape(1, 8).astype(np.float32)
+                # 如果没有未来第10帧，使用最后一帧（max）的值
+                max_gripper_state = gripper_poses_dict[max_frame_index]
+                max_gripper_pose = max_gripper_state[:7]
+                max_gripper_open = convert_physical_robot_openness_to_rlbench_format(float(max_gripper_state[7]))
+                trajectory = np.concatenate([max_gripper_pose, [max_gripper_open]]).reshape(1, 8).astype(np.float32)
             
             stage = 'N/A'
             target_position = np.zeros(3, dtype=np.float32)
             
-            # 保存expert trajectory信息
-            expert_traj_info = {
+            # 保存expert trajectory信息到expert_info目录
+            expert_info_dict = {
                 'trajectory': trajectory,
                 'stage': stage,
-                'target_position': target_position,
             }
-            low_dim_obs_demo._expert_trajectories.append(expert_traj_info)
+            expert_info_dict['debug_info'] = {'tar_position': target_position}
+            expert_info_path = Path(save_dir) / "expert_info" / f"{frame_index}.pkl"
+            _write_pkl(expert_info_path, expert_info_dict)
         
         # 保存low_dim_obs_demo
         low_dim_pickle_path = os.path.join(save_dir, "low_dim_obs.pkl")
@@ -1081,7 +1086,7 @@ class Runner:
         
         # 读取nerf相机 (8, 16, 36) - 对应 cam2, cam3, cam4
         for cam_name in ["8", "16", "36"]:
-            # 读取相机参数
+            # 读取相机参数（路径已更新：nerf_data/{frame_idx}/poses/{cam_name}.pkl）
             cam_pose_path = data_path / f"nerf_data/{frame_idx}/poses/{cam_name}.pkl"
             if not cam_pose_path.exists():
                 print(f"[WARN] Camera pose not found: {cam_pose_path}, skipping")
@@ -1095,9 +1100,9 @@ class Runner:
             cam_near = cam_params['near']
             cam_far = cam_params['far']
             
-            # 读取depth和rgb
-            cam_depth_path = data_path / f"nerf_data/depths/{frame_idx}/{cam_name}.png"
-            cam_rgb_path = data_path / f"nerf_data/images/{frame_idx}/{cam_name}.png"
+            # 读取depth和rgb（路径已更新：nerf_data/{frame_idx}/depths/{cam_name}.png 和 nerf_data/{frame_idx}/images/{cam_name}.png）
+            cam_depth_path = data_path / f"nerf_data/{frame_idx}/depths/{cam_name}.png"
+            cam_rgb_path = data_path / f"nerf_data/{frame_idx}/images/{cam_name}.png"
             
             if not cam_depth_path.exists() or not cam_rgb_path.exists():
                 print(f"[WARN] Camera {cam_name} images not found, skipping")
