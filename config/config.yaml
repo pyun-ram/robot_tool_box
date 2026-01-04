@@ -1,0 +1,68 @@
+# Server配置
+server:
+  host: "0.0.0.0"
+  port: 8000
+  api_key: null  # 可选
+  policy:
+    checkpoint_dir: "path/to/checkpoint"
+    default_prompt: null
+    model_type: "default"  # 可选值: "default", "3dafdp"
+
+# Client配置
+client:
+  # WebSocket连接
+  websocket:
+    server_uri: "ws://10.11.5.2:8000"
+    api_key: null  # 可选
+    reconnect_interval: 5  # 秒
+  
+  # ROS话题配置
+  ros:
+    # 输入话题（sensor_sync_node订阅）
+    camera_topics:
+      cam1:
+        rgb: "/cam1/rgb/image_raw"
+        depth: "/cam1/depth/image_raw"
+      cam2:
+        rgb: "/cam2/rgb/image_raw"
+        depth: "/cam2/depth/image_raw"
+      cam3:
+        rgb: "/cam3/rgb/image_raw"
+        depth: "/cam3/depth/image_raw"
+      cam4:
+        rgb: "/cam4/rgb/image_raw"
+        depth: "/cam4/depth/image_raw"
+    gripper_pose_topic: "/gripper_pose"  # 机器人夹爪位姿话题
+    
+    # sensor_sync_node发布的话题
+    sync_topic: "/sensor_sync/data"  # 同步后的传感器数据话题
+    
+    sync_rate: 20.0  # Hz（sensor_sync_node发布频率）
+    sync_precision: 0.05  # 秒（同步时间窗口）
+  
+  # Policy模型节点配置
+  policy_model_node:
+    processing_rate: 20.0  # Hz（处理频率，与sync_rate相同）
+  
+  # Execution节点配置
+  execution_node:
+    execution_rate: 20.0  # Hz（执行频率）
+  
+  # 相机参数
+  camera:
+    calib_path: "path/to/calibrations.json"
+    image_size: [480, 270]  # 输入尺寸
+    output_size: [256, 256]  # 输出尺寸（模型输入）
+  
+  # Action Buffer配置
+  action_buffer:
+    buffer_size: 10  # 历史action数量
+    smoothing_method: "weighted_average"  # 平滑方法
+    weights: "exponential"  # 权重类型（exponential/linear/uniform）
+  
+  # 机器人执行配置
+  robot:
+    joint_topic: "/joint_states"  # 关节状态话题（可选）
+    joint_command_topic: "/joint_command"  # 关节命令话题
+    robot_sdk_config: "path/to/robot_config.yaml"  # 机器人SDK配置（可选）
+

@@ -1,0 +1,7 @@
+# Requirements for the project
+msgpack
+numpy
+typing-extensions
+websockets
+tyro
+pyyaml
