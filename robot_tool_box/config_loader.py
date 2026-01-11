@@ -3,9 +3,11 @@
 提供统一的配置加载接口，支持从YAML文件加载配置。
 """
 
+import json
 import yaml
 from typing import Dict, Any, Optional
 from pathlib import Path
+import numpy as np
 
 
 class ConfigLoader:
@@ -71,6 +73,7 @@ class ConfigLoader:
         
         return client_config
     
+    
     def get_full_config(self) -> Dict[str, Any]:
         """
         获取完整配置
@@ -82,6 +85,7 @@ class ConfigLoader:
             raise RuntimeError("Config not loaded")
         
         return self._config
+        
     
     def reload_config(self) -> None:
         """重新加载配置文件"""
@@ -119,4 +123,27 @@ def get_client_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """获取客户端配置的便捷函数"""
     loader = get_config_loader(config_path)
     return loader.get_client_config()
+
+def get_camera_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """获取相机配置的函数"""
+    loader = get_config_loader(config_path)
+    _cameras_config = loader.get_client_config().get("camera", None)
+    calib_path = _cameras_config.get("calib_path", None)
+    with open(calib_path, "r") as f:
+        camera_config = json.load(f)
+        cam_names = sorted(camera_config.keys())
+
+        instrin = []
+        extrin = []
+
+        for cam in cam_names:
+            instrin.append(np.array(camera_config[cam]["intrinsics"], dtype=np.float32))
+            extrin.append(np.array(camera_config[cam]["extrinsics"], dtype=np.float32))
+
+        camera_config = {
+            "intrinsics": np.stack(instrin, axis=0),
+            "extrinsics": np.stack(extrin, axis=0),
+        }
+
+    return camera_config
 

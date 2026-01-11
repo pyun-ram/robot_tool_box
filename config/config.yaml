@@ -50,8 +50,8 @@ client:
   
   # 相机参数
   camera:
-    calib_path: "path/to/calibrations.json"
-    image_size: [480, 270]  # 输入尺寸
+    calib_path: "src/js/calibrations.json"
+    image_size: [424, 240]  # 输入尺寸
     output_size: [256, 256]  # 输出尺寸（模型输入）
   
   # Action Buffer配置
