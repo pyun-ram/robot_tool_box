@@ -13,7 +13,8 @@ import websockets.sync.client
 try:
     import sys
     from pathlib import Path
-    tmp_path = Path(__file__).parent.parent / "tmp" / "openpi_client"
+    tmp_path = Path(__file__).parent.parent / "openpi_client"
+    print(tmp_path)
     if tmp_path.exists():
         sys.path.insert(0, str(tmp_path.parent))
         from openpi_client import msgpack_numpy
@@ -75,36 +76,38 @@ class WebSocketClient:
         self._ws: Optional[websockets.sync.client.ClientConnection] = None
         self._server_metadata: Optional[Dict] = None
         
-        self.connect()
+        # 等待服务器可用（而不是立即连接失败）
+        self._wait_for_server()
     
     def connect(self) -> None:
         """连接到服务器"""
         logging.info(f"Connecting to server at {self._uri}...")
+        headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
+        self._ws = websockets.sync.client.connect(
+            self._uri, compression=None, max_size=None, additional_headers=headers
+        )
+        # 接收服务器元数据（如果有）
         try:
-            headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
-            self._ws = websockets.sync.client.connect(
-                self._uri, compression=None, max_size=None, additional_headers=headers
-            )
-            # 接收服务器元数据（如果有）
-            try:
-                metadata = msgpack_numpy.unpackb(self._ws.recv(timeout=1.0))
-                self._server_metadata = metadata
-            except Exception:
-                # 如果没有元数据，继续
-                self._server_metadata = {}
-            logging.info(f"Connected to server at {self._uri}")
-        except Exception as e:
-            logging.error(f"Failed to connect to server: {e}")
-            raise
+            metadata = msgpack_numpy.unpackb(self._ws.recv(timeout=1.0))
+            self._server_metadata = metadata
+        except Exception:
+            # 如果没有元数据，继续
+            print("No metadata received")
+            self._server_metadata = {}
+        logging.info(f"Connected to server at {self._uri}")
     
     def _wait_for_server(self) -> None:
         """等待服务器可用（重连机制）"""
+        logging.info(f"Waiting for server at {self._uri}...")
         while True:
             try:
                 self.connect()
                 return
-            except Exception:
-                logging.info(f"Still waiting for server at {self._uri}...")
+            except (ConnectionRefusedError, OSError) as e:
+                logging.info(f"Still waiting for server at {self._uri}... ({e})")
+                time.sleep(self._reconnect_interval)
+            except Exception as e:
+                logging.error(f"Unexpected error connecting to server: {e}")
                 time.sleep(self._reconnect_interval)
     
     def send_observation(self, obs: Dict) -> None:

@@ -1,7 +1,7 @@
 # Server配置
 server:
   host: "0.0.0.0"
-  port: 8000
+  port: 8765
   api_key: null  # 可选
   policy:
     checkpoint_dir: "path/to/checkpoint"
@@ -21,21 +21,21 @@ client:
     # 输入话题（sensor_sync_node订阅）
     camera_topics:
       cam1:
-        rgb: "/cam1/rgb/image_raw"
-        depth: "/cam1/depth/image_raw"
+        rgb: "/cam1/color/image_raw/compressed"
+        depth: "/cam1/aligned_depth_to_color/image_raw"
       cam2:
-        rgb: "/cam2/rgb/image_raw"
-        depth: "/cam2/depth/image_raw"
+        rgb: "/cam2/color/image_raw/compressed"
+        depth: "/cam2/aligned_depth_to_color/image_raw"
       cam3:
-        rgb: "/cam3/rgb/image_raw"
-        depth: "/cam3/depth/image_raw"
+        rgb: "/cam3/color/image_raw/compressed"
+        depth: "/cam3/aligned_depth_to_color/image_raw"
       cam4:
-        rgb: "/cam4/rgb/image_raw"
-        depth: "/cam4/depth/image_raw"
+        rgb: "/cam4/color/image_raw/compressed"
+        depth: "/cam4/aligned_depth_to_color/image_raw"
     gripper_pose_topic: "/gripper_pose"  # 机器人夹爪位姿话题
     
     # sensor_sync_node发布的话题
-    sync_topic: "/sensor_sync/data"  # 同步后的传感器数据话题
+    sync_topic: "/sensor_sync_package"  # 同步后的传感器数据话题
     
     sync_rate: 20.0  # Hz（sensor_sync_node发布频率）
     sync_precision: 0.05  # 秒（同步时间窗口）
@@ -46,7 +46,7 @@ client:
   
   # Execution节点配置
   execution_node:
-    execution_rate: 20.0  # Hz（执行频率）
+    execution_rate: 2 #20.0  # Hz（执行频率）
   
   # 相机参数
   camera:
