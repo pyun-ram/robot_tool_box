@@ -64,7 +64,7 @@ def to_numpy_tree(x):
 
 class Arguments(tap.Tap):
     """模型参数配置类"""
-    checkpoint: Path = "src/ckpts/epoch_84999.pth"
+    checkpoint: Path = "src/ckpts/epoch_94999.pth"
     seed: int = 2
     device: str = "cuda"
     headless: int = 0
@@ -129,8 +129,8 @@ class Arguments(tap.Tap):
     dense_interpolation: int = 1
     interpolation_length: int = 2
     relative_action: int = 0
-    denoise_model: str = "ddpm"  # "ddpm" or "rectified_flow"
-    num_inference_steps: int = 100  # inference steps, RF uses 10
+    denoise_model: str = "rectified_flow"  # "ddpm" or "rectified_flow"
+    num_inference_steps: int = 10  # inference steps, RF uses 10
 
     # Shared model parameters
     action_dim: int = 8
@@ -432,22 +432,22 @@ class DAPolicy(_base_policy.BasePolicy):
                     # 调用模型推理（需要根据实际模型接口调整）
                     # action = self.model(obs)  
 
-                    input_dict = {
-                        "trajectory_mask": self.tra_mask,
-                        "rgb_obs": obs["rgbs"],
-                        "pcd_obs": obs["pcds"],
-                        "instruction": self.instr,
-                        "curr_gripper": obs["curr_gripper_history"],
-                        # 你也可以把其它需要复现推理的东西加进来
-                    }
+                    # input_dict = {
+                    #     "trajectory_mask": self.tra_mask,
+                    #     "rgb_obs": obs["rgbs"],
+                    #     "pcd_obs": obs["pcds"],
+                    #     "instruction": self.instr,
+                    #     "curr_gripper": obs["curr_gripper_history"],
+                    #     # 你也可以把其它需要复现推理的东西加进来
+                    # }
 
-                    # 2) 递归转 numpy
-                    input_dict_np = to_numpy_tree(input_dict)
+                    # # 2) 递归转 numpy
+                    # input_dict_np = to_numpy_tree(input_dict)
 
-                    # 3) 存成 .npy（注意：这是 pickle 形式）
-                    import time
-                    save_path = Path(f"model_inputs{time.time()}.npy")
-                    np.save(save_path, np.array(input_dict_np, dtype=object), allow_pickle=True)
+                    # # 3) 存成 .npy（注意：这是 pickle 形式）
+                    # import time
+                    # save_path = Path(f"model_inputs{time.time()}.npy")
+                    # np.save(save_path, np.array(input_dict_np, dtype=object), allow_pickle=True)
                     
                     output_dict = self.model(
                         gt_trajectory=None,

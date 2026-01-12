@@ -31,6 +31,7 @@ try:
     # from openpi_client import base_policy as _base_policy
     # from openpi.policy.fake_policy import FakePolicy
     from openpi.policy.da_policy import DAPolicy
+    from openpi.policy.expert_policy import ExpertPolicy
     HAS_OPENPI = True
 except ImportError:
     HAS_OPENPI = False
@@ -69,6 +70,7 @@ class PolicyServer:
         # 创建假的policy对象
         # fake_policy = FakePolicy(camera_config=self._cameras_config)
         da_policy = DAPolicy(camera_config=self._cameras_config)
+        # da_policy = ExpertPolicy(camera_config=self._cameras_config)
         
         # 创建WebsocketPolicyServer实例（它会处理所有逻辑）
         ws_server = WebsocketPolicyServer(

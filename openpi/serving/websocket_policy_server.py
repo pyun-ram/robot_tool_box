@@ -129,7 +129,6 @@ class WebsocketPolicyServer:
             joint angles数组
         """
         # 调用policy的infer方法
-
         action_dict = self._policy.infer(obs)
         
         # 如果返回的是字典，尝试提取joint_angles
